@@ -153,7 +153,10 @@ class CtaTemplate(ABC):
         volume: float,
         stop: bool = False,
         lock: bool = False,
-        net: bool = False
+        net: bool = False,
+        order_config: dict = None,
+        market: bool = False,
+        local_stop: bool = False
     ) -> list:
         """
         Send buy order to open a long position.
@@ -165,7 +168,10 @@ class CtaTemplate(ABC):
             volume,
             stop,
             lock,
-            net
+            net,
+            order_config,
+            market,
+            local_stop
         )
 
     def sell(
@@ -174,7 +180,10 @@ class CtaTemplate(ABC):
         volume: float,
         stop: bool = False,
         lock: bool = False,
-        net: bool = False
+        net: bool = False,
+        order_config: dict = None,
+        market: bool = False,
+        local_stop: bool = False
     ) -> list:
         """
         Send sell order to close a long position.
@@ -186,7 +195,10 @@ class CtaTemplate(ABC):
             volume,
             stop,
             lock,
-            net
+            net,
+            order_config,
+            market,
+            local_stop
         )
 
     def short(
@@ -195,7 +207,10 @@ class CtaTemplate(ABC):
         volume: float,
         stop: bool = False,
         lock: bool = False,
-        net: bool = False
+        net: bool = False,
+        order_config: dict = None,
+        market: bool = False,
+        local_stop: bool = False
     ) -> list:
         """
         Send short order to open as short position.
@@ -207,7 +222,10 @@ class CtaTemplate(ABC):
             volume,
             stop,
             lock,
-            net
+            net,
+            order_config,
+            market,
+            local_stop
         )
 
     def cover(
@@ -216,7 +234,10 @@ class CtaTemplate(ABC):
         volume: float,
         stop: bool = False,
         lock: bool = False,
-        net: bool = False
+        net: bool = False,
+        order_config: dict = None,
+        market: bool = False,
+        local_stop: bool = False
     ) -> list:
         """
         Send cover order to close a short position.
@@ -228,7 +249,10 @@ class CtaTemplate(ABC):
             volume,
             stop,
             lock,
-            net
+            net,
+            order_config,
+            market,
+            local_stop
         )
 
     def send_order(
@@ -239,14 +263,20 @@ class CtaTemplate(ABC):
         volume: float,
         stop: bool = False,
         lock: bool = False,
-        net: bool = False
+        net: bool = False,
+        order_config: dict = None,  ## 高级订单配置
+        market: bool = False,       ## 是否市价单
+        local_stop: bool = False,   ## 若是停止单，是否使用本地停止单
+        local_stop_trigger_method: list = None,  ## 若是本地停止单，触发方式(填写需与tick中的字段名一致)，如['ask_price_1', 'bid_price_1']
+        local_stop_limit_price: float = None,    ## 若是本地停止单，如不是None,则触发后下限价单，如为None,则触发后下市价单
     ) -> list:
         """
         Send a new order.
         """
         if self.trading:
             vt_orderids: list = self.cta_engine.send_order(
-                self, direction, offset, price, volume, stop, lock, net
+                self, direction, offset, price, volume, stop, lock, net,
+                order_config, market, local_stop, local_stop_trigger_method   ## add order_config, market and local_stop
             )
             return vt_orderids
         else:

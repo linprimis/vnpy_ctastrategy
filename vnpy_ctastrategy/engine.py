@@ -219,42 +219,55 @@ class CtaEngine(BaseEngine):
             if stop_order.vt_symbol != tick.vt_symbol:
                 continue
 
-            long_triggered = (
-                stop_order.direction == Direction.LONG and tick.last_price >= stop_order.price
-            )
-            short_triggered = (
-                stop_order.direction == Direction.SHORT and tick.last_price <= stop_order.price
-            )
+            if stop_order.local_stop_trigger_method is None:
+                long_triggered = (
+                    stop_order.direction == Direction.LONG and tick.last_price >= stop_order.price
+                )
+                short_triggered = (
+                    stop_order.direction == Direction.SHORT and tick.last_price <= stop_order.price
+                )
+            else:
+                if stop_order.direction == Direction.LONG:
+                    long_triggered = any(getattr(tick, method) >= stop_order.price for method in stop_order.local_stop_trigger_method)
+                    short_triggered = False
+                else:
+                    long_triggered = False
+                    short_triggered = any(getattr(tick, method) <= stop_order.price for method in stop_order.local_stop_trigger_method)
 
             if long_triggered or short_triggered:
                 strategy: CtaTemplate = self.strategies[stop_order.strategy_name]
 
+                contract: Optional[ContractData] = self.main_engine.get_contract(stop_order.vt_symbol)
+
                 # To get excuted immediately after stop order is
                 # triggered, use limit price if available, otherwise
                 # use ask_price_5 or bid_price_5
-                if stop_order.direction == Direction.LONG:
-                    if tick.limit_up:
-                        price = tick.limit_up
-                    else:
-                        price = tick.ask_price_5
+                if stop_order.local_stop_limit_price is None:
+                    ## send market order
+                    vt_orderids: list = self.send_server_order(
+                        strategy,
+                        contract,
+                        stop_order.direction,
+                        stop_order.offset,
+                        stop_order.price,
+                        stop_order.volume,
+                        OrderType.MARKET,
+                        stop_order.lock,
+                        stop_order.net
+                    )
                 else:
-                    if tick.limit_down:
-                        price = tick.limit_down
-                    else:
-                        price = tick.bid_price_5
-
-                contract: Optional[ContractData] = self.main_engine.get_contract(stop_order.vt_symbol)
-
-                vt_orderids: list = self.send_limit_order(
-                    strategy,
-                    contract,
-                    stop_order.direction,
-                    stop_order.offset,
-                    price,
-                    stop_order.volume,
-                    stop_order.lock,
-                    stop_order.net
-                )
+                    ## send limit order
+                    vt_orderids: list = self.send_limit_order(
+                        strategy,
+                        contract,
+                        stop_order.direction,
+                        stop_order.offset,
+                        stop_order.local_stop_limit_price,
+                        stop_order.volume,
+                        stop_order.lock,
+                        stop_order.net,
+                        stop_order.order_config,
+                    )
 
                 # Update stop order status if placed successfully
                 if vt_orderids:
@@ -284,7 +297,8 @@ class CtaEngine(BaseEngine):
         volume: float,
         type: OrderType,
         lock: bool,
-        net: bool
+        net: bool,
+        order_config: dict = None
     ) -> list:
         """
         Send a new order to server.
@@ -313,6 +327,10 @@ class CtaEngine(BaseEngine):
         vt_orderids: list = []
 
         for req in req_list:
+            # Add order_config into req
+            if order_config:
+                req.order_config = order_config
+
             vt_orderid: str = self.main_engine.send_order(req, contract.gateway_name)
 
             # Check if sending order successful
@@ -338,7 +356,8 @@ class CtaEngine(BaseEngine):
         price: float,
         volume: float,
         lock: bool,
-        net: bool
+        net: bool,
+        order_config: dict = None
     ) -> list:
         """
         Send a limit order to server.
@@ -352,7 +371,8 @@ class CtaEngine(BaseEngine):
             volume,
             OrderType.LIMIT,
             lock,
-            net
+            net,
+            order_config
         )
 
     def send_server_stop_order(
@@ -364,7 +384,8 @@ class CtaEngine(BaseEngine):
         price: float,
         volume: float,
         lock: bool,
-        net: bool
+        net: bool,
+        order_config: dict = None
     ) -> list:
         """
         Send a stop order to server.
@@ -381,7 +402,8 @@ class CtaEngine(BaseEngine):
             volume,
             OrderType.STOP,
             lock,
-            net
+            net,
+            order_config
         )
 
     def send_local_stop_order(
@@ -392,7 +414,11 @@ class CtaEngine(BaseEngine):
         price: float,
         volume: float,
         lock: bool,
-        net: bool
+        net: bool,
+        order_config: dict = None,
+        market: bool = False,
+        local_stop_trigger_method: list = None,
+        local_stop_limit_price: float = None
     ) -> list:
         """
         Create a new local stop order.
@@ -412,6 +438,10 @@ class CtaEngine(BaseEngine):
             lock=lock,
             net=net
         )
+        stop_order.order_config = order_config
+        stop_order.market = market
+        stop_order.local_stop_trigger_method = local_stop_trigger_method
+        stop_order.local_stop_limit_price = local_stop_limit_price
 
         self.stop_orders[stop_orderid] = stop_order
 
@@ -466,7 +496,12 @@ class CtaEngine(BaseEngine):
         volume: float,
         stop: bool,
         lock: bool,
-        net: bool
+        net: bool,
+        order_config: dict = None,
+        market: bool = False,
+        local_stop: bool = False,
+        local_stop_trigger_method: list = None,
+        local_stop_limit_price: float = None
     ) -> list:
         """
         """
@@ -476,21 +511,30 @@ class CtaEngine(BaseEngine):
             return ""
 
         # Round order price and volume to nearest incremental value
-        price: float = round_to(price, contract.pricetick)
-        volume: float = round_to(volume, contract.min_volume)
+        ## 对下单价格和数量进行取整应由上层调用者完成，去掉这里的检查
+        # price: float = round_to(price, contract.pricetick)
+        # volume: float = round_to(volume, contract.min_volume)
 
         if stop:
-            if contract.stop_supported:
+            if contract.stop_supported and not local_stop:
                 return self.send_server_stop_order(
-                    strategy, contract, direction, offset, price, volume, lock, net
+                    strategy, contract, direction, offset, price, volume, lock, net,
+                    order_config    # add order_config
                 )
             else:
                 return self.send_local_stop_order(
-                    strategy, direction, offset, price, volume, lock, net
+                    strategy, direction, offset, price, volume, lock, net,
+                    order_config, market, local_stop_trigger_method, local_stop_limit_price # add order_config
                 )
+        if market:
+            return self.send_server_order(
+                strategy, contract, direction, offset, price, volume, OrderType.MARKET, lock, net,
+                order_config    # add order_config
+            )
         else:
             return self.send_limit_order(
-                strategy, contract, direction, offset, price, volume, lock, net
+                strategy, contract, direction, offset, price, volume, lock, net,
+                order_config    # add order_config
             )
 
     def cancel_order(self, strategy: CtaTemplate, vt_orderid: str) -> None:
@@ -693,6 +737,7 @@ class CtaEngine(BaseEngine):
             self.main_engine.subscribe(req, contract.gateway_name)
         else:
             self.write_log(f"行情订阅失败，找不到合约{strategy.vt_symbol}", strategy)
+            return
 
         # Put event to update init completed status.
         strategy.inited = True

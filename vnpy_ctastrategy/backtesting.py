@@ -815,12 +815,20 @@ class BacktestingEngine:
         volume: float,
         stop: bool,
         lock: bool,
-        net: bool
+        net: bool,
+        order_config: dict = None,
+        market: bool = False,
+        local_stop: bool = False
     ) -> list:
         """"""
         price: float = round_to(price, self.pricetick)
         if stop:
             vt_orderid: str = self.send_stop_order(direction, offset, price, volume)
+        elif market:
+            if direction == Direction.LONG:
+                vt_orderid: str = self.send_limit_order(direction, offset, 9999999, volume)
+            else:
+                vt_orderid: str = self.send_limit_order(direction, offset, 0, volume)
         else:
             vt_orderid: str = self.send_limit_order(direction, offset, price, volume)
         return [vt_orderid]
